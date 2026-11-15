@@ -1,21 +1,19 @@
-"""正式验收(助教用)。在本仓库最新 main 的干净 clone 里运行:
+"""控制器包隔离评测。在本仓库的干净检出里运行。
 
-    python accept.py 提交1.zip 提交2.zip ... [--perturb 3] [--seed <当天定>] [--csv 结果.csv]
+    python accept.py 控制器1.zip 控制器2.zip ... [--perturb 3] [--seed 20261001] [--csv 结果.csv]
 
-学生只交 homework/ 目录打的压缩包(学号_姓名.zip);也可以给解压后的目录。
+支持含 controller.py 的目录或压缩包。
 包里 homework/ 在第一层、套了一层文件夹、或者直接就是 homework 的内容,都能认出来。
 
 做的事:
-  1. 只取学生的 homework/,和本仓库的 fastsim/ 拼成临时工作区;
+  1. 将控制器包和本仓库的 fastsim/、controllers/ 拼成临时工作区;
   2. 每条赛道(A-D 原版 + 每条 --perturb 个扰动版:地图扰动 + 车参数扰动 + 观测噪声)
-     单独起一个子进程运行学生的 Controller,
-     仿真和判定在本进程里做,本进程从不导入学生代码 —— 学生改不了车模型和计时;
+     单独起一个子进程运行 Controller，主进程执行仿真和计时;
   3. 限制:Controller 初始化 60 秒;每步平均计算时间 ≤ 20ms(子进程里只计 controller(state) 本身);
      单步端到端 ≤ 1 秒(含进程通信,防止卡死);
-  4. 报告每条赛道是否完赛(圈速仅供参考,不排名),以及有没有交 思路.md。
+  4. 报告每条赛道的完赛状态、圈速，以及可选的 思路.md 文件。
 
-学生代码会在本机执行,来源不可信的话请在虚拟机或容器里跑。
-学生用到的第三方库(homework/requirements.txt)需要提前装好。
+控制器依赖的第三方库需要提前安装。CSV 中保留 student 字段以兼容已有结果处理程序。
 """
 from __future__ import annotations
 
@@ -39,7 +37,7 @@ STEP_MEAN_LIMIT = 0.020 # 每步平均耗时上限 s
 STEP_HARD_LIMIT = 1.0   # 单步最长 s
 
 
-# ---------------- 子进程:只跑学生代码 ----------------
+# ---------------- 子进程:运行控制器 ----------------
 
 def _worker(conn, workdir: str):
     os.chdir(workdir)
@@ -85,7 +83,7 @@ class _Remote:
         try:
             self.proc.start()
             child.close()
-            self.conn.send((replace(track, name='?'), car))   # 不告诉学生是哪条赛道
+            self.conn.send((replace(track, name='?'), car))   # 控制器按地图几何处理赛道
             self._expect(INIT_LIMIT, 'init_timeout')
         except BaseException:
             child.close()
@@ -130,7 +128,7 @@ class _Remote:
 # ---------------- 主进程:判定 ----------------
 
 def find_homework(root: Path) -> Path | None:
-    """在学生提交里找 homework 目录:含 controller.py 的最浅一层。"""
+    """寻找含 controller.py 的最浅目录，优先兼容 homework 目录。"""
     hits = sorted((p.parent for p in root.rglob('controller.py') if '__MACOSX' not in p.parts),
                   key=lambda d: (d.name != 'homework', len(d.parts)))
     return hits[0] if hits else None
@@ -139,6 +137,7 @@ def find_homework(root: Path) -> Path | None:
 def workspace(homework: Path) -> str:
     tmp = Path(tempfile.mkdtemp(prefix='fastsim_accept_'))
     shutil.copytree(ROOT / 'fastsim', tmp / 'fastsim', ignore=shutil.ignore_patterns('__pycache__'))
+    shutil.copytree(ROOT / 'controllers', tmp / 'controllers', ignore=shutil.ignore_patterns('__pycache__'))
     shutil.copytree(homework, tmp / 'homework', ignore=shutil.ignore_patterns('__pycache__'))
     return str(tmp)
 
@@ -165,9 +164,9 @@ def run_one(workdir: str, track, car, noise_seed=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('students', nargs='+', type=Path, help='学生提交的 zip 或目录')
+    ap.add_argument('students', nargs='+', type=Path, help='控制器包的 zip 或目录')
     ap.add_argument('--perturb', type=int, default=3, help='每条赛道的扰动版数量')
-    ap.add_argument('--seed', type=int, default=20261001, help='扰动种子,验收当天再定,别提前公开')
+    ap.add_argument('--seed', type=int, default=20261001, help='扰动种子起点')
     ap.add_argument('--csv', type=Path)
     args = ap.parse_args()
 

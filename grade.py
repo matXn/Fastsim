@@ -1,11 +1,12 @@
-"""本地自测:在 A-D 上跑 homework/controller.py 的 Controller,打印每条赛道的圈速。
+"""在 A-D 上运行控制器，报告完赛状态和圈速。
 
     python grade.py                 # A B C D 四条都跑
     python grade.py --tracks B      # 只跑 B
     python grade.py --perturb 3     # 再加每条赛道 3 个扰动版(地图扰动 + 车参数扰动 + 观测噪声)
     python grade.py --plot          # 每条赛道出一张图,存到 out/
 
-正式验收用 accept.py,判定和这里完全一样,只是把你的代码放在单独进程里跑。
+--module 可选择 controllers.baseline、controllers.neural 或自定义模块。
+accept.py 提供控制器包的独立进程评测，使用相同的仿真判定。
 """
 import argparse
 import importlib
@@ -21,7 +22,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--tracks', nargs='+', default=list(TRACKS))
     ap.add_argument('--perturb', type=int, default=0, help='每条赛道再跑几个扰动版')
-    ap.add_argument('--module', default='homework.controller', help='Controller 所在的模块')
+    ap.add_argument('--module', default='controllers.baseline', help='Controller 所在的模块')
     ap.add_argument('--plot', action='store_true')
     args = ap.parse_args()
 
@@ -37,7 +38,7 @@ def main():
             result = run_lap(track, Controller(track, car), car, noise_seed=seed)
         except Exception:
             traceback.print_exc()
-            print(f'赛道 {track.name:5s}  你的代码报错')
+            print(f'赛道 {track.name:5s}  控制器报错')
             times.append(np.nan)
             continue
         print(f'赛道 {track.name:5s}  长 {track.length:5.1f}m  {result}  每步 {result.ctrl_time * 1e3:.2f}ms')
