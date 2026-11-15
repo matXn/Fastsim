@@ -1,6 +1,6 @@
 """跑一圈:从起跑线静止出发,车身压到边界就算出界,回到起跑线算完赛。
 
-自己写训练环境时,直接用 car_off_track() 和 Progress 判定出界和完赛,就和评分完全一致。
+训练环境使用 car_off_track() 和 Progress 判定出界和完赛，与批量评测保持一致。
 """
 from __future__ import annotations
 

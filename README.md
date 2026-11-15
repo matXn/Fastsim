@@ -1,132 +1,152 @@
-# Fastsim:已知赛道,跑最快的一圈
+# Fastsim
 
-比赛时,车第一圈边跑边建图;建完图以后,整条赛道的边界就都知道了。
-这个作业模拟的就是这一步:**给你完整的赛道边界,写一个控制器,让车一圈跑得越快越好。**
+已知赛道地图下的单圈仿真、路线规划与控制器训练项目。
 
-赛道是比赛的 A、B、C、D 四套。比赛当天随机抽一套,所以你的程序要**同一份代码、四条都能跑**。
+车辆第一圈建图后，第二圈可以利用完整边界规划路线和速度。Fastsim 提供比赛 A、B、C、D 四套赛道、车辆动力学、车身碰撞检测、扰动评测，以及纯追踪和神经网络参考控制器，支持在同一套仿真判定下迭代控制方法。
 
 ![四条赛道](docs/tracks.png)
 
-## 环境
+## 安装
 
-Python 3.10+:
+使用 Python 3.10 或更新版本，在仓库根目录运行。
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
+
+核心仿真与训练使用 NumPy，轨迹绘图使用 Matplotlib，测试使用 pytest。
 
 ## 快速开始
 
 ```bash
-python grade.py              # 跑 A-D 四条,打印每圈用时
-python grade.py --perturb 3  # 再加每条赛道 3 个扰动版(验收会跑,见下文)
-python grade.py --plot       # 同时在 out/ 下画出轨迹(颜色是车速)
-python -m pytest             # 检查仿真本身没被改坏
+# 1 m/s 中心线纯追踪基线，运行 A–D 四条赛道
+python grade.py
+
+# 已保存的神经控制器，运行原版和每条三个扰动版本
+python grade.py --module controllers.neural --perturb 3
+
+# 绘制速度着色轨迹，输出到 out/
+python grade.py --module controllers.neural --plot
+
+# 完整测试
+python -m pytest -q
 ```
 
-默认的 `homework/controller.py` 沿中心线、全程 1 m/s,四条都能跑完,总用时约 144 秒。
+`--tracks A B` 可选择赛道，`--module` 指定提供 `Controller` 类的 Python 模块。`grade.py --perturb 3` 使用种子 1、2、3，并同时加入地图、车辆参数和观测扰动。
 
-## 你要做什么
+## 目录
 
-**只改 `homework/` 目录**。评分只调用 `homework/controller.py` 里的 `Controller`:
+| 路径 | 内容 |
+|---|---|
+| `fastsim/` | 车辆模型、赛道、碰撞、圈速判定和绘图 |
+| `fastsim/tracks/` | A–D 原始地图 |
+| `controllers/baseline.py` | 中心线、1 m/s 纯追踪基线 |
+| `controllers/planner.py` | 中心线路线与曲率速度表 |
+| `controllers/neural.py` | 21 → 64 → 64 → 2 神经跟踪器与训练方法 |
+| `controllers/model.npz` | 已训练的参考权重 |
+| `training/train.py` | 行为克隆、DAgger、课程训练与独立测试 |
+| `grade.py` | 控制器批量评测和轨迹出图 |
+| `accept.py` | 控制器包的独立进程评测 |
+| `tests/` | 仿真、评测、模型和训练回归测试 |
+| `runs/`、`out/` | 本地运行产物，由 Git 忽略 |
+
+## 控制器接口
 
 ```python
 class Controller:
     def __init__(self, track, car_params):
-        # 开跑前调用一次:拿到整条赛道和车参数,做准备(规划路线、加载模型……)
+        # 初始化时取得完整地图和标称车辆参数。
         ...
 
     def __call__(self, state):
-        # 之后每 0.02 秒调用一次
-        return v_cmd, steer_cmd     # 目标车速 m/s,目标前轮转角 rad(左正)
+        # 每 0.02 秒仿真时间调用一次。
+        return v_cmd, steer_cmd
 ```
 
-**方法不限**:规划 + 跟踪、PID、MPC、强化学习、DAgger……都可以。默认示例用的是「规划路线和速度表 + `fastsim.PathFollower` 纯追踪跟踪」,最省事的改法是只改其中的 `plan()`。
+`v_cmd` 单位为 m/s，`steer_cmd` 为前轮转角，单位 rad，左转为正。返回值需为两个有限数值。
 
-### 接口
+### 地图与参数
 
-开跑前(`__init__`):
-
-| | 说明 |
+| 字段或方法 | 含义 |
 |---|---|
-| `track.left` / `track.right` | 左(内)、右(外)边界,闭合折线 |
-| `track.centerline` | 中心线,5 cm 一个点,首点是起跑线 |
-| `track.bounds()` | 中心线每点的左法向,以及到左、右边界的**最近**距离(保守值,弯道处实际可用宽度可能更大) |
-| `track.on_track(points)` | 判断一批点在不在赛道上 |
-| `track.project(xy)` | 点投影到中心线:走过的弧长、横向偏移 |
-| `track.length` | 一圈长度 |
-| `car_params` | 车的全部参数,见 [docs/车辆参数.md](docs/车辆参数.md) |
+| `track.left`、`track.right` | 内、外边界闭合折线 |
+| `track.centerline` | 约 5 cm 间距的闭合中心线，首点为起点 |
+| `track.bounds()` | 中心线法向与到两侧边界的最近距离 |
+| `track.on_track(points)` | 批量查询点是否位于赛道内 |
+| `track.project(xy)` | 投影到中心线，返回弧长与横向偏移 |
+| `track.length` | 一圈中心线长度 |
+| `car_params` | 标称车辆参数，定义于 `fastsim/params.py` |
 
-每步(`state`,只读;原版赛道上是精确值,扰动版上带观测噪声):
+### 状态
 
 | 字段 | 含义 |
 |---|---|
-| `t` | 本圈已用时间 s |
-| `x`, `y` | 地图绝对坐标系下的后轴中心位置 m,无需通过 IMU 积分 |
-| `yaw` | 车头朝向 rad |
-| `v` | 车速 m/s |
-| `yaw_rate` | 横摆角速度 rad/s |
-| `accel` | 纵向加速度 m/s² |
-| `steer` | 当前前轮实际转角 rad |
+| `t` | 当前圈仿真时间，s |
+| `x`、`y` | 地图坐标下的后轴中心位置，m |
+| `yaw` | 车头朝向，rad |
+| `v` | 车速，m/s |
+| `yaw_rate` | 横摆角速度，rad/s |
+| `accel` | 纵向加速度，m/s² |
+| `steer` | 当前实际前轮转角，rad |
 
-车的物理上限(极速 6 m/s、总抓地 0.4 G、最大加速 0.3 G、最大减速 0.4 G;纵横向共用摩擦圆)和运动模型见 [docs/车辆参数.md](docs/车辆参数.md),代码在 `fastsim/car.py`。
+原版赛道使用精确状态。扰动评测对状态加入观测噪声，碰撞、进度与轨迹记录使用仿真真值。控制器接收当前地图绝对位姿，车辆响应包含速度惯性和转向速率限制。
 
-## 规则
+## 仿真与评测
 
-- 车从起跑线静止出发,沿中心线方向跑完一整圈计时(冲线时刻插值);
-- **出界**:车身(0.56 × 0.35 m 矩形)碰到边界,即车的任何一个角出了赛道,边界折点进入车身,或车身边与边界相交/接触。步内按车身运动量细分采样(上限约 1 cm),含起点和终点;这是离散近似,不是严格连续碰撞检测;
-- 超过 120 秒没跑完算超时;
-- `Controller` 初始化限时 60 秒;每步平均计算时间不超过 20 ms(对应实车 50 Hz),单步不超过 1 秒;
-- 返回值必须是两个有限的数,否则判接口错误;
-- **全部验收赛道完赛是门槛**;过了门槛,看的是思路,圈速只作参考,不排名。
+参数从 `fastsim/params.py` 的 `CarParams` 读取。当前标称极速 6 m/s，总抓地 0.4 G，驱动加速上限 0.3 G，制动上限 0.4 G，纵横向运动共享摩擦圆。尺寸、公式和实现假设见参数文档。[车辆参数与物理模型](docs/车辆参数.md)
 
-### 验收怎么做
+- 从起跑位置静止出发，累计前进一圈，冲线时间按步内进度插值。
+- 使用 0.56 × 0.35 m 矩形车身检测边界接触，并按车身运动量以约 1 cm 间隔采样步内位姿。
+- 单圈时间上限为 120 s。
+- 扰动地图包含边界折点 ±3 cm 抖动及整体旋转、平移。
+- 车辆摩擦系数浮动 ±10%，速度响应时间常数、转角速率浮动 ±20%。控制器使用标称车辆参数。
+- 观测噪声标准差分别为位置 2 cm、朝向 0.01 rad、车速 0.02 m/s、横摆角速度 0.02 rad/s、纵向加速度 0.1 m/s²、转角 0.005 rad。
 
-- 验收赛道 = A–D 原版 + 每条若干**扰动版**。扰动的随机种子验收当天才定,所以请写通用的方法,不要针对四条赛道分别背答案。扰动版同时加上:
-  - 地图:边界折点随机抖 ±3 cm,整张图随机旋转、平移;
-  - 车:统一摩擦系数 ±10%(同时影响转弯和制动;驱动能力上限仍为0.3 G),电机响应时间、舵机速度 ±20%(`Controller` 拿到的仍是标称参数);
-  - 观测噪声(标准差):位置 2 cm、朝向 0.01 rad、车速 0.02 m/s、横摆角速度 0.02 rad/s、加速度 0.1 m/s²、转角 0.005 rad;
-- 验收只取你的 `homework/` 目录,放进一份干净的本仓库里跑,`homework/` 以外的改动都不生效;
-- 你的代码在单独的进程里运行,只能通过 `Controller` 的返回值影响车;
-- 用到的第三方库(torch、scipy……)写进 `homework/requirements.txt`。
+训练和自定义评测可复用 `run_lap()`，或使用 `Car`、`car_off_track()`、`Progress` 构建闭环。使用 `noise_seed` 可复现车辆与观测扰动。
 
-## 提交
+## 神经控制器与训练
 
-- `controller.py`:你的 `Controller`;
-- `思路.md`:用了什么方法、为什么这么做、试过哪些方案、哪里失败了、怎么改的;
-- 其他你用到的代码、模型权重,以及 `requirements.txt`(如果用了第三方库)。
-- 提交内容仅包含目录 ./homework 的压缩包
-## 自行训练
+参考方法先由完整地图生成中心线路线和曲率速度表，再将前方 8 个路线点的车体坐标、车辆状态与参考速度编码为 21 维输入。两层 64 单元 ReLU 网络输出目标速度和转角。纯追踪控制器提供监督标签，训练采用 NumPy Adam、行为克隆和 DAgger。
 
-仓库不提供现成的训练环境,自行选定方案。但**判定请直接调用下面这些函数**,复用验收的碰撞和进度规则。下面是简化循环;完整的输出校验、超时和冲线插值以 `run_lap()` 为准:
+```bash
+# 检查采样、损失下降、梯度与模型读写
+python -m training.train --smoke
 
-```python
-import numpy as np
-from fastsim import (CarParams, DT, Progress, State, car_off_track, load_track, noisy_params,
-                     noisy_state, start_pose)
-from fastsim.car import Car
+# 12 轮课程训练，每轮 500 次更新
+python -m training.train
 
-rng = np.random.default_rng(seed)
-track = load_track('A').perturbed(seed)         # 地图扰动;不要扰动就直接 load_track('A')
-car = Car(noisy_params(CarParams(), rng))       # 车参数扰动;不要就 Car(CarParams())
-car.reset(*start_pose(track))
-progress = Progress(track)
-t = 0.0
-while t < 120.0:
-    state = noisy_state(State(t, car.x, car.y, car.yaw, car.v, car.yaw_rate, car.accel, car.steer), rng)
-    v_cmd, steer_cmd = ...                      # 你的策略,只用 state
-    car.step(v_cmd, steer_cmd, DT)
-    t += DT
-    if car_off_track(track, car):   # 出界(检查这一步的采样位姿)
-        break
-    if progress.update(car.x, car.y) >= progress.length:   # 跑完一圈
-        break
+# 复测入库模型，使用 A–D 原版及种子 90001、90002、90003
+python -m training.train --evaluate
+
+# 使用指定模型和新的输出目录
+python -m training.train --evaluate --model controllers/model.npz --out runs/reference-check
 ```
 
-### 数据流与时间
+课程限速为 1.5、2.5、4、6 m/s。训练种子从 10000 起，选择集使用每条原版及种子 50001、50002，连续两轮 12/12 完赛后晋级。最终评测使用每条原版及种子 90001–90003，共 16 局。
 
-初始化一次:完整地图和标称车辆参数 → `Controller(track, car_params)`。
-每 0.02 秒仿真时间:当前状态 → 控制器 → 目标速度、目标前轮转角 → 车辆推进 → 碰撞和完赛判定 → 下一步。
-状态共有 8 个字段(包括时间)。原版为真值;扰动版为当前真值加独立观测噪声,判定和日志始终用真值。
-没有虚拟雷达、IMU 积分定位或额外通信延迟。50 Hz 是仿真频率,运行一圈的电脑耗时取决于算法。
-车辆仍有速度响应惯性和转向速率限制,指令不会瞬间变成实际状态。
+每次运行在 `runs/` 下创建独立目录，保存参数配置、候选、训练进度、评测明细和汇总。`--out` 可指定新目录。训练结束且独立测试 16/16 完赛后，导出该运行目录内的 `model.npz`，用于后续复核和选择。
+
+### 保存模型的来源与复测
+
+入库模型来自本地历史训练 `20260929_235117/best_cap_6.npz`，训练为 12 轮、每轮 500 次更新，模型 schema 为 `known_map_tracking_v2_lat03`，限速 6 m/s。模型文件原样保留，SHA-256 为 `122d45a07d1c9257de8199005d06fd82dcdaead390068ad829af54cfc29752c9`。
+
+历史训练配置为独立侧向 0.3 G、纵向 0.4 G，原测试记录 16/16 完赛。本次在当前统一摩擦圆仿真配置下重新评测，使用仓库基线 `e2a02d0` 的车辆模型，日期为 2026-11-15。A–D 原版加每条种子 90001、90002、90003，共 16 局，控制器限速 6 m/s，结果为 **16/16 完赛**。
+
+| 赛道 | 原版圈速 / s | 本组完赛 |
+|---|---:|---:|
+| A | 12.579 | 4/4 |
+| B | 12.572 | 4/4 |
+| C | 13.130 | 4/4 |
+| D | 12.751 | 4/4 |
+
+上述圈速属于当前 Fastsim 配置下的仿真结果，实车适用性待验证。通过 `python -m training.train --evaluate` 可重新生成逐局结果和参数快照。
+
+## 兼容入口
+
+`homework.controller` 保留为 `controllers.baseline` 的兼容导入路径。`accept.py` 支持含 `controller.py` 的目录或压缩包，将控制器放入独立进程执行。
+
+```bash
+python accept.py homework --perturb 3 --seed 90001 --csv out.csv
+```
+
+隔离评测的初始化上限为 60 s，控制器每步平均计算上限为 20 ms，单步连同进程通信上限为 1 s。
